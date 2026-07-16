@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>風太ラン FUTA RUN</title>
+<style>
+  :root{
+    --bg:#1b1030;
+    --panel:#241645;
+    --ink:#ffe9b0;
+    --accent:#ff9a3c;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;}
+  body{
+    background:
+      radial-gradient(circle at 50% 20%, #2a1a52 0%, #140b28 70%, #0b0618 100%);
+    color:var(--ink);
+    font-family:"Courier New",monospace;
+    display:flex;flex-direction:column;
+    align-items:center;justify-content:center;
+    min-height:100%;
+    gap:14px;
+    padding:16px;
+    -webkit-user-select:none;user-select:none;
+    touch-action:manipulation;
+  }
+  h1{
+    margin:0;
+    font-size:clamp(20px,5vw,34px);
+    letter-spacing:.08em;
+    color:var(--accent);
+    text-shadow:2px 2px 0 #7a2f00, 4px 4px 0 rgba(0,0,0,.4);
+  }
+  #wrap{
+    width:min(92vw, 720px);
+    aspect-ratio:16/9;
+    position:relative;
+    border:4px solid #3a2560;
+    border-radius:6px;
+    box-shadow:0 0 0 4px #120a26, 0 14px 40px rgba(0,0,0,.55);
+    background:#000;
+    overflow:hidden;
+  }
+  canvas{
+    width:100%;height:100%;display:block;
+    image-rendering:pixelated;
+    image-rendering:crisp-edges;
+    cursor:pointer;
+  }
+  #hint{
+    font-size:12px;opacity:.7;text-align:center;line-height:1.6;
+    max-width:720px;
+  }
+  #hint b{color:var(--accent);}
+  #mute{
+    position:absolute;top:8px;right:8px;
+    background:rgba(20,10,40,.7);
+    color:var(--ink);
+    border:2px solid #4a3070;
+    border-radius:4px;
+    font-family:inherit;font-size:12px;
+    padding:4px 8px;cursor:pointer;z-index:5;
+  }
+  #credit{font-size:11px;opacity:.5;text-align:center;line-height:1.6;}
+  #credit a{color:inherit;}
+</style>
+</head>
+<body>
+  <h1>風太ラン ＦＵＴＡ　ＲＵＮ</h1>
+  <div id="wrap">
+    <canvas id="game" width="480" height="270"></canvas>
+    <button id="mute" aria-label="音のオンオフ">♪ ON</button>
+  </div>
+  <div id="hint">
+    <b>SPACE / クリック / タップ</b> でジャンプ。二本足の風太でリンゴを集めよう。<br>
+    岩やタケを飛び越えて、20〜30秒でどこまでスコアを伸ばせる？
+  </div>
+  <div id="credit">
+    モデル：千葉市動物公園のレッサーパンダ「風太」（2003.7.5生）／
+    2005年に二本足で約30秒立つ姿が話題に。好物はリンゴ・ササ・サツマイモ。
+  </div>
+
+<script>
+"use strict";
+(function(){
+// ------------------------------------------------------------------
+//  風太ラン  ── ワンボタン横スクロール・ランゲーム
+// ------------------------------------------------------------------
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+const W = cv.width, H = cv.height;
+
+// ============ ドット絵パレット ============
+const PAL = {
+  '.':null,
+  K:'#241207', // 輪郭・目・鼻の濃茶
+  B:'#3a2412', // 手足の濃茶
+  O:'#c1651f', // 体オレンジ
+  L:'#e59042', // ハイライト明オレンジ
+  R:'#93481a', // 影ラスト
+  C:'#f5e7c9', // 顔クリーム
+  W:'#ffffff', // 白
+  // りんご
+  a:'#e23b2e', h:'#ff8a7a', g:'#3fae3a', s:'#6b3f1a',
+  // 岩
+  x:'#7a7a7a', y:'#a6a6a6', z:'#4d4d4d',
+  // 竹
+  m:'#5aa02c', n:'#7fc94a', o:'#3c6e1c',
+  // しっぽ縞
+  T:'#ecd6a6'
+};
+
+// ---- 風太 本体（しっぽ無し） 11幅 x 16高 ----
+const FUTA_BODY = [
+  "..K.....K..",
+  ".KWK...KWK.",
+  ".RCCCCCCCR.",
+  "KCCCCCCCCCK",
+  "KCKCCCCCKCK",
+  "KCRCKKKCRCK",
+  ".KCCWWWCCK.",
+  ".ROOOOOOOR.",
+  "ROOOOOOOOOR",
+  "ROOOLLLOOOR",
+  "ROOOLLLOOOR",
+  "ROOOOLOOOOR",
+  ".ROOOOOOOR.",
+  ".ROOOOOOOR.",
+];
+// 走りフレームの脚（14,15行目に合成）
+const LEGS_A = ["..BB..BB...","..BB..BB..."];
+const LEGS_B = [".BB....BB..",".BB....BB.."];
+const LEGS_JUMP = ["...BBBB....","...B..B...."];
+
+// ---- しっぽ（縞・ふさふさ） 8幅 x 8高 ----
+const FUTA_TAIL = [
+  "....RRR",
+  "...RRRR",
+  "...TTTR",
+  "..RRRR.",
+  "..TTTR.",
+  ".RRRR..",
+  ".TTTR..",
+  "RRRR...",
+  "TTTR...",
+  "RRR....",
+];
+
+const APPLE = [
+  "...s...",
+  "..sg...",
+  ".aaaaa.",
+  "ahaaaa.",
+  "aaaaaaa",
+  ".aaaaa.",
+  "..aaa..",
+];
+
+const ROCK = [
+  "...xxx...",
+  ".xxyyxx..",
+  ".xyyyxxx.",
+  "xxyyyyxxx",
+  "xxyyyyxxx",
+  "zxxxxxxxz",
+  "zzzzzzzzz",
+];
+
+// 竹（背の高い障害）
+const BAMBOO = [
+  ".nmm.",
+  ".mmo.",
+  ".nmm.",
+  ".mmo.",
+  "nnmm.",
+  ".nmm.",
+  ".mmo.",
+  ".mmo.",
+  ".nmm.",
+  "ommoo",
+];
+
+function drawSprite(mat, x, y, s, flip){
+  for(let r=0;r<mat.length;r++){
+    const row = mat[r];
+    for(let c=0;c<row.length;c++){
+      const col = PAL[row[c]];
+      if(!col) continue;
+      const cc = flip ? (row.length-1-c) : c;
+      ctx.fillStyle = col;
+      ctx.fillRect((x+cc*s)|0,(y+r*s)|0,s,s);
+    }
+  }
+}
+
+// 風太をまとめて描く（しっぽ→本体→脚）
+function drawFuta(x, y, s, legs){
+  // しっぽ：本体の左下・後ろ
+  drawSprite(FUTA_TAIL, x - 5*s, y + 6*s, s);
+  drawSprite(FUTA_BODY, x, y, s);
+  drawSprite(legs, x, y + 14*s, s);
+}
+
+// ============ サウンド（8bit） ============
+const Audio = (function(){
+  let actx=null, master=null, muted=false, bgmTimer=null, bgmStep=0;
+  function ensure(){
+    if(actx) return;
+    actx = new (window.AudioContext||window.webkitAudioContext)();
+    master = actx.createGain();
+    master.gain.value = 0.22;
+    master.connect(actx.destination);
+  }
+  function blip(freq, dur, type, vol, slideTo){
+    if(!actx||muted) return;
+    const t = actx.currentTime;
+    const o = actx.createOscillator();
+    const g = actx.createGain();
+    o.type = type||'square';
+    o.frequency.setValueAtTime(freq, t);
+    if(slideTo) o.frequency.linearRampToValueAtTime(slideTo, t+dur);
+    g.gain.setValueAtTime(vol||0.25, t);
+    g.gain.exponentialRampToValueAtTime(0.0008, t+dur);
+    o.connect(g); g.connect(master);
+    o.start(t); o.stop(t+dur+0.02);
+  }
+  // ---- 効果音 ----
+  const jump = ()=>blip(300,0.16,'square',0.3,720);
+  const apple= ()=>{blip(660,0.08,'square',0.3);setTimeout(()=>blip(990,0.12,'square',0.3),70);};
+  const hit  = ()=>{blip(200,0.35,'sawtooth',0.35,60);};
+  const start= ()=>{blip(520,0.1,'square',0.3);setTimeout(()=>blip(780,0.14,'square',0.3),90);};
+  // ---- BGM：明るいチップチューンのループ ----
+  const MELODY=[523,659,784,659, 523,659,784,880, 784,659,523,587, 659,587,523,392];
+  const BASS  =[131,131,196,196, 131,131,165,165, 196,196,147,147, 165,165,131,131];
+  function bgmTick(){
+    if(!actx||muted) return;
+    const i = bgmStep % MELODY.length;
+    blip(MELODY[i],0.16,'square',0.10);
+    if(i%2===0) blip(BASS[i],0.20,'triangle',0.14);
+    bgmStep++;
+  }
+  function startBgm(){
+    if(bgmTimer) return;
+    bgmStep=0;
+    bgmTick();
+    bgmTimer=setInterval(bgmTick,150);
+  }
+  function stopBgm(){ if(bgmTimer){clearInterval(bgmTimer);bgmTimer=null;} }
+  function toggle(){
+    muted=!muted;
+    if(muted) stopBgm();
+    return !muted;
+  }
+  function resume(){ ensure(); if(actx.state==='suspended') actx.resume(); }
+  return {ensure,resume,jump,apple,hit,start,startBgm,stopBgm,toggle,isMuted:()=>muted};
+})();
+
+// ============ ゲーム状態 ============
+const GROUND_Y = 226;      // 地面の上端
+const FUTA_X   = 70;       // 風太の固定X
+const S = 3;               // ドットスケール
+const FUTA_H = 16*S;       // 風太の高さ(48)
+const GRAV = 1700;
+const JUMP_V = -560;
+
+let state='title';         // title / play / over
+let futaY, vy, onGround, runT, legFrame;
+let scrollX, speed, dist, score, apples, spawnT, obstacles, items, clouds;
+let best = +(localStorage.getItem('futa_high')||0);
+let flashT=0, gameTime=0;
+
+function reset(){
+  futaY = GROUND_Y - FUTA_H;
+  vy=0; onGround=true; runT=0; legFrame=0;
+  scrollX=0; speed=150; dist=0; score=0; apples=0;
+  spawnT=0.7; obstacles=[]; items=[]; gameTime=0; flashT=0;
+  clouds=[{x:120,y:40,s:2},{x:320,y:70,s:3},{x:420,y:30,s:2}];
+}
+
+function startGame(){
+  reset();
+  state='play';
+  Audio.resume();
+  Audio.start();
+  Audio.startBgm();
+}
+
+function gameOver(){
+  state='over';
+  Audio.hit();
+  Audio.stopBgm();
+  if(score>best){ best=score; localStorage.setItem('futa_high', best); }
+}
+
+// ============ 入力 ============
+function doJump(){
+  if(onGround){
+    vy=JUMP_V; onGround=false;
+    Audio.resume(); Audio.jump();
+  }
+}
+function action(){
+  Audio.resume();
+  if(state==='title'){ startGame(); }
+  else if(state==='play'){ doJump(); }
+  else if(state==='over'){ if(gameTime>0.4) startGame(); }
+}
+window.addEventListener('keydown',e=>{
+  if(e.code==='Space'||e.code==='ArrowUp'||e.code==='Enter'){ e.preventDefault(); action(); }
+  if(e.code==='KeyM'){ updateMute(Audio.toggle()); }
+});
+cv.addEventListener('mousedown',e=>{e.preventDefault();action();});
+cv.addEventListener('touchstart',e=>{e.preventDefault();action();},{passive:false});
+
+const muteBtn=document.getElementById('mute');
+function updateMute(on){ muteBtn.textContent = on?'♪ ON':'♪ OFF'; }
+muteBtn.addEventListener('click',e=>{
+  e.stopPropagation();
+  Audio.resume();
+  const on=Audio.toggle();
+  updateMute(on);
+  if(on && state==='play') Audio.startBgm();
+});
+
+// ============ スポーン ============
+function spawnObstacle(){
+  // 岩 or 竹
+  if(Math.random()<0.5){
+    const s=3;
+    obstacles.push({type:'rock',mat:ROCK,x:W+10,w:ROCK[0].length*s,h:ROCK.length*s,s});
+  }else{
+    const s=3;
+    obstacles.push({type:'bamboo',mat:BAMBOO,x:W+10,w:BAMBOO[0].length*s,h:BAMBOO.length*s,s});
+  }
+  // りんごを空中に置くことがある
+  if(Math.random()<0.7){
+    const s=3;
+    const ah = (Math.random()<0.5)? 60 : 100; // 頭上 or ジャンプで届く高さ
+    items.push({mat:APPLE,x:W+10+ (30+Math.random()*40), y:GROUND_Y-ah, w:APPLE[0].length*s,h:APPLE.length*s,s,got:false});
+  }
+}
+
+// ============ 更新 ============
+function update(dt){
+  gameTime+=dt;
+  if(flashT>0) flashT-=dt;
+  // 雲
+  for(const c of clouds){ c.x-=speed*0.15*dt; if(c.x<-40){c.x=W+20;c.y=20+Math.random()*70;} }
+
+  if(state!=='play'){ runT+=dt; return; }
+
+  // 難易度：徐々に加速
+  speed += 10*dt;              // 150 → 約30秒で450
+  const sp = speed;
+  dist += sp*dt;
+  score = Math.floor(dist/10) + apples*50;
+
+  // 風太の物理
+  vy += GRAV*dt;
+  futaY += vy*dt;
+  if(futaY >= GROUND_Y-FUTA_H){ futaY=GROUND_Y-FUTA_H; vy=0; onGround=true; }
+  // 走りアニメ
+  runT += dt;
+  if(onGround){ legFrame = (Math.floor(runT*12)%2); }
+
+  // スポーン
+  spawnT -= dt;
+  if(spawnT<=0){
+    spawnObstacle();
+    const gap = Math.max(0.62, 1.5 - gameTime*0.02); // 徐々に詰まる
+    spawnT = gap + Math.random()*0.4;
+  }
+
+  // 障害物移動＆当たり判定
+  const fx=FUTA_X+2*S, fy=futaY+2*S, fw=7*S, fh=12*S; // 風太の当たり判定（少し内側）
+  for(const o of obstacles){ o.x -= sp*dt; }
+  obstacles = obstacles.filter(o=>o.x + o.w > -20);
+  for(const o of obstacles){
+    const oy = GROUND_Y - o.h;
+    if(fx < o.x+o.w-4 && fx+fw > o.x+4 && fy+fh > oy+4){
+      gameOver(); return;
+    }
+  }
+
+  // りんご
+  for(const it of items){ it.x -= sp*dt; }
+  items = items.filter(it=> it.x+it.w>-20 && !it.got);
+  for(const it of items){
+    if(!it.got && fx < it.x+it.w && fx+fw > it.x && fy < it.y+it.h && fy+fh > it.y){
+      it.got=true; apples++; flashT=0.25; Audio.apple();
+    }
+  }
+}
+
+// ============ 描画 ============
+function drawBg(){
+  // 空
+  const g=ctx.createLinearGradient(0,0,0,GROUND_Y);
+  g.addColorStop(0,'#6ec6ff'); g.addColorStop(1,'#bfe9ff');
+  ctx.fillStyle=g; ctx.fillRect(0,0,W,GROUND_Y);
+  // 太陽（丸みのあるドット）
+  const scx=416, scy=36;
+  ctx.fillStyle='#ffd84d';
+  ctx.fillRect(scx-11,scy-6,22,12);
+  ctx.fillRect(scx-6,scy-11,12,22);
+  ctx.fillRect(scx-9,scy-9,18,18);
+  ctx.fillStyle='#fff3b0';
+  ctx.fillRect(scx-6,scy-4,12,8);
+  ctx.fillRect(scx-4,scy-6,8,12);
+  // 雲
+  for(const c of clouds) drawCloud(c.x,c.y,c.s);
+  // 遠景の丘
+  ctx.fillStyle='#8fd36b';
+  ctx.fillRect(0,GROUND_Y-18,W,18);
+  ctx.beginPath();
+  // 地面
+  ctx.fillStyle='#79b84e'; ctx.fillRect(0,GROUND_Y,W,6);         // 芝
+  ctx.fillStyle='#5c9a37'; ctx.fillRect(0,GROUND_Y+6,W,4);
+  ctx.fillStyle='#8a5a2b'; ctx.fillRect(0,GROUND_Y+10,W,H-GROUND_Y-10); // 土
+  // 土の模様（スクロール）
+  ctx.fillStyle='#764a22';
+  const off = (dist*1)% 40;
+  for(let x=-off; x<W; x+=40){ ctx.fillRect(x,GROUND_Y+16,10,4); ctx.fillRect(x+20,GROUND_Y+26,8,4); }
+}
+function drawCloud(x,y,s){
+  ctx.fillStyle='#ffffff';
+  ctx.fillRect(x,y,20*s/2,7*s/2);
+  ctx.fillRect(x+6,y-5,12,10);
+  ctx.fillRect(x+14,y-2,14,8);
+}
+
+function drawHud(){
+  ctx.fillStyle='#241207';
+  ctx.font='16px "Courier New",monospace';
+  ctx.textAlign='left';
+  ctx.fillText('SCORE '+score, 10, 22);
+  ctx.textAlign='right';
+  ctx.fillText('🍎'+apples, W-10, 22);
+  ctx.textAlign='left';
+  ctx.fillStyle='#5a3a12';
+  ctx.font='11px "Courier New",monospace';
+  ctx.fillText('BEST '+best, 10, 38);
+  if(flashT>0){
+    ctx.fillStyle='rgba(255,240,120,'+(flashT*1.6)+')';
+    ctx.fillRect(0,0,W,H);
+  }
+}
+
+function drawTitle(){
+  drawBg();
+  // アイドルの風太（軽く上下）
+  const bob = Math.sin(runT*3)*2;
+  drawFuta(FUTA_X, GROUND_Y-FUTA_H+bob, S, LEGS_A);
+  // 見出しパネル
+  ctx.fillStyle='rgba(20,10,40,.78)';
+  ctx.fillRect(150,60,270,140);
+  ctx.strokeStyle='#ff9a3c'; ctx.lineWidth=3; ctx.strokeRect(150,60,270,140);
+  ctx.textAlign='center';
+  ctx.fillStyle='#ff9a3c';
+  ctx.font='24px "Courier New",monospace';
+  ctx.fillText('風太ラン', 285, 96);
+  ctx.fillStyle='#ffe9b0';
+  ctx.font='12px "Courier New",monospace';
+  ctx.fillText('二本足の風太で走ろう', 285, 120);
+  ctx.fillText('SPACE / タップ でジャンプ', 285, 142);
+  ctx.fillText('リンゴを集めてスコアUP', 285, 160);
+  ctx.fillStyle='#ff9a3c';
+  ctx.font='13px "Courier New",monospace';
+  const blink = (Math.floor(runT*2)%2===0);
+  if(blink) ctx.fillText('▶ PRESS TO START ◀', 285, 186);
+  if(best>0){
+    ctx.fillStyle='#ffe9b0'; ctx.font='11px "Courier New",monospace';
+    ctx.fillText('BEST '+best, 285, 200);
+  }
+  ctx.textAlign='left';
+}
+
+function drawPlay(){
+  drawBg();
+  // 障害物
+  for(const o of obstacles){ drawSprite(o.mat, o.x, GROUND_Y-o.h, o.s); }
+  // りんご
+  for(const it of items){ if(!it.got) drawSprite(it.mat, it.x, it.y, it.s); }
+  // 風太
+  const legs = onGround ? (legFrame? LEGS_B:LEGS_A) : LEGS_JUMP;
+  drawFuta(FUTA_X, futaY, S, legs);
+  drawHud();
+}
+
+function drawOver(){
+  drawPlay();
+  ctx.fillStyle='rgba(20,10,40,.72)';
+  ctx.fillRect(0,0,W,H);
+  ctx.textAlign='center';
+  ctx.fillStyle='#ff9a3c';
+  ctx.font='26px "Courier New",monospace';
+  ctx.fillText('GAME OVER', W/2, 90);
+  ctx.fillStyle='#ffe9b0';
+  ctx.font='18px "Courier New",monospace';
+  ctx.fillText('SCORE  '+score, W/2, 130);
+  ctx.font='13px "Courier New",monospace';
+  ctx.fillText('🍎 リンゴ '+apples+' 個', W/2, 154);
+  if(score>=best && score>0){
+    ctx.fillStyle='#ffd23c';
+    ctx.fillText('★ NEW BEST! ★', W/2, 178);
+  }else{
+    ctx.fillStyle='#ffe9b0';
+    ctx.fillText('BEST  '+best, W/2, 178);
+  }
+  ctx.fillStyle='#ff9a3c';
+  const blink=(Math.floor(gameTime*2)%2===0);
+  if(blink && gameTime>0.4) ctx.fillText('▶ もう一度あそぶ ◀', W/2, 210);
+  ctx.textAlign='left';
+}
+
+// ============ メインループ ============
+let last=performance.now();
+function loop(now){
+  let dt=(now-last)/1000; last=now;
+  if(dt>0.05) dt=0.05;
+  update(dt);
+  ctx.clearRect(0,0,W,H);
+  if(state==='title') drawTitle();
+  else if(state==='play') drawPlay();
+  else drawOver();
+  schedule();
+}
+function schedule(){
+  // 可視時はrAF（滑らか）。非表示タブでも止まらないようフォールバック。
+  if(document.hidden){ setTimeout(function(){ loop(performance.now()); }, 1000/60); }
+  else { requestAnimationFrame(loop); }
+}
+reset();
+schedule();
+})();
+</script>
+</body>
+</html>
